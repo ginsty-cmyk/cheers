@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>🍺 数字炸弹 | 全网联机版</title>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.1/build/qrcode.min.js"></script>
+    <style>
+        :root { --primary: #00f2fe; --danger: #ff4757; --bg: #0f172a; }
+        body { margin: 0; background: var(--bg); color: white; font-family: -apple-system, system-ui, sans-serif; -webkit-tap-highlight-color: transparent; }
+        .container { max-width: 600px; margin: 0 auto; padding: 20px; box-sizing: border-box; text-align: center; }
+        
+        /* 设置面板 */
+        .card { background: #1e293b; padding: 25px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.3); }
+        h1 { font-size: 1.8rem; margin-bottom: 25px; background: linear-gradient(45deg, #00f2fe, #4facfe); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .group { margin-bottom: 20px; text-align: left; }
+        label { display: block; margin-bottom: 8px; font-size: 0.9rem; color: #94a3b8; }
+        input { width: 100%; padding: 15px; background: #334155; border: 2px solid transparent; border-radius: 12px; color: white; box-sizing: border-box; font-size: 1rem; transition: 0.3s; }
+        input:focus { border-color: var(--primary); outline: none; }
+        .btn { width: 100%; padding: 16px; background: linear-gradient(45deg, #4facfe, #00f2fe); border: none; border-radius: 12px; color: white; font-weight: bold; font-size: 1.1rem; cursor: pointer; transition: 0.2s; }
+        .btn:active { transform: scale(0.98); }
+
+        /* 游戏面板 */
+        #game-view { display: none; }
+        .room-tag { background: #334155; padding: 5px 15px; border-radius: 20px; font-size: 0.9rem; display: inline-block; margin-bottom: 10px; }
+        #qr-canvas { width: 120px !important; height: 120px !important; padding: 10px; background: white; border-radius: 12px; margin: 15px auto; }
+        .status-msg { height: 2em; line-height: 2em; font-weight: bold; font-size: 1.2rem; margin: 10px 0; color: #fbbf24; }
+        
+        /* 响应式矩阵 */
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(50px, 1fr)); gap: 8px; margin-top: 20px; }
+        .num-btn { aspect-ratio: 1/1; border: none; background: #334155; color: white; border-radius: 10px; font-size: 1rem; font-weight: bold; transition: all 0.2s; box-shadow: 0 4px 0 #1e293b; }
+        .num-btn:active { transform: translateY(2px); box-shadow: 0 2px 0 #1e293b; }
+        .num-btn.clicked { background: #0f172a; color: #475569; box-shadow: none; transform: translateY(4px); pointer-events: none; }
+        .num-btn.bomb { background: var(--danger) !important; color: white; box-shadow: 0 0 15px var(--danger); animation: shake 0.4s; }
+        @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 75% { transform: translateX(4px); } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="setup-view" class="card">
+            <h1>🍺 开启数字炸弹</h1>
+            <div class="group">
+                <label>数字总数 (1-500)</label>
+                <input type="number" id="total-in" value="100">
+            </div>
+            <div class="group">
+                <label>炸弹数量</label>
+                <input type="number" id="bomb-in" value="5">
+            </div>
+            <button class="btn" onclick="createRoom()">立即开启</button>
+            <p style="color: #64748b; font-size: 0.8rem; margin-top: 15px;">全网联机 | 自动更新 | 无需下载</p>
+        </div>
+
+        <div id="game-view">
+            <div class="room-tag">房间: <span id="rid-display"></span></div>
+            <canvas id="qr-canvas"></canvas>
+            <div id="status" class="status-msg">点击方块开始</div>
+            <div id="grid" class="grid"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        const roomId = new URLSearchParams(location.search).get('room');
+
+        async function createRoom() {
+            const config = {
+                total: parseInt(document.getElementById('total-in').value),
+                bomb_count: parseInt(document.getElementById('bomb-in').value)
+            };
+            const res = await fetch('/api/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(config)
+            }).then(r => r.json());
+            location.href = `?room=${res.room_id}`;
+        }
+
+        if (roomId) {
+            document.getElementById('setup-view').style.display = 'none';
+            document.getElementById('game-view').style.display = 'block';
+            document.getElementById('rid-display').innerText = roomId;
+            QRCode.toCanvas(document.getElementById('qr-canvas'), location.href);
+
+            const protocol = location.protocol === 'https:' ? 'wss' : 'ws';
+            ws = new WebSocket(`${protocol}://${location.host}/ws/${roomId}`);
+
+            ws.onmessage = (e) => {
+                const d = JSON.parse(e.data);
+                if (d.type === 'init') {
+                    renderGrid(d.total, d.clicked);
+                } else if (d.type === 'update') {
+                    const btn = document.getElementById('b-' + d.num);
+                    btn.classList.add('clicked');
+                    if (d.is_bomb) {
+                        btn.classList.add('bomb');
+                        document.getElementById('status').innerText = `💥 炸了！请喝 ${d.punish} 杯！`;
+                        if (window.navigator.vibrate) window.navigator.vibrate([200, 100, 200]);
+                    } else {
+                        document.getElementById('status').innerText = `✅ 安全`;
+                    }
+                }
+            };
+        }
+
+        function renderGrid(total, clicked) {
+            const g = document.getElementById('grid');
+            g.innerHTML = '';
+            for (let i = 1; i <= total; i++) {
+                const b = document.createElement('button');
+                b.id = 'b-' + i; b.className = 'num-btn'; b.innerText = i;
+                if (clicked.includes(i)) b.classList.add('clicked');
+                b.onclick = () => ws.send(JSON.stringify({type: 'click', num: i}));
+                g.appendChild(b);
+            }
+        }
+    </script>
+</body>
+</html>
